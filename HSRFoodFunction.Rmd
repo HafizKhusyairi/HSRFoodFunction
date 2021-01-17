@@ -1,0 +1,122 @@
+---
+title: "HSR Food Function"
+author: "Hafiz Khusyairi"
+date: "17/01/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+I want to use Health Star Rating (HSR) calculator to discover healthier snacks but could not find the R-function version of this function so I decide to program the calculator on my own. The use of this calculator to find snacks with high HSR from the data I scraped from the internet is documented in a subsequent post. As my personal use is to find HSR of non-dairy snacks, I only code for category 2 (non-dairy food) items. However, the code can easily be modified to account for other food categories.
+
+### The function
+
+The code I present here is based on [the guide uploaded on 15 November 2020][1]. The mechanism of this calculator is pretty simple: We look up an item's nutrional informations per 100 gr or 100 ml (energy, sugar, sodium, saturated fat, protein, fibre, percentage of concentrated fruits and vegetables, and percentage of non-concentrated fruits and vegetables) on the tables provided in the guide, then add and subtract these values to get the final HSR Score. Then we look up the final HSR Score in the Health Star table to determine how many stars the item receive.
+
+I copied these tables from the Word document and save them as csv files, then load them to R and parse them as follows.
+
+```{r, warning=FALSE,message=FALSE,error=FALSE, results='hide'}
+library(readr)
+
+VPoints <- read_csv("VPoints.csv",col_names=F)
+VPoints = data.frame(VPoints[-1,])
+VPointsConcentrated = parse_number(VPoints[,2])
+VPointsNonConcentrated = parse_number(VPoints[,3])
+
+BaselinePoints = read_csv("BaselinePoints.csv",col_names = F)
+BaselinePoints = data.frame(BaselinePoints[-1,])
+BaselineEnergy = parse_number(BaselinePoints[,2])
+BaselineSaturatedFat = parse_number(BaselinePoints[,3])
+BaselineTotalSugar = parse_number(BaselinePoints[,4])
+BaselineSodium = parse_number(BaselinePoints[,5])
+
+PandFPoints = read_csv("PandFPoints.csv",col_names = F)
+PandFPoints = data.frame(PandFPoints[-1,])
+ProteinPoint = parse_number(PandFPoints[,2])
+FibrePoint = parse_number(PandFPoints[,3])
+
+StarTable = read_csv("HSRStar.csv",col_names = F)
+Category = data.frame(StarTable[,2])
+Star = data.frame(StarTable[,1])
+```
+
+The HSR Score consist of 4 components: HSR Point = HSR Baseline Point - HSR V Point (Vegetable) - HSR P (Protein) Point - HSR F (Fibre) Point, where HSR P Point is only included in this calculation under some condition.
+
+The HSR Baseline Point is based on energy, sugar, sodium, and saturated fat
+
+```{r}
+HSRBaselinePoints = function(Energy,SatFat,TotalSugar,Sodium){
+  sum(Energy>BaselineEnergy,na.rm = T)+sum(SatFat>BaselineSaturatedFat,na.rm = T)+
+    sum(TotalSugar>BaselineTotalSugar,na.rm=T)+sum(Sodium>BaselineSodium,na.rm=T)
+}
+```
+
+While the Vegetable Point is based on the percentage of concentrated and non-concentrated fruits and vegetables. The formula used is based on whether the item has concentrated component, non-concentrated component, or both.
+
+```{r}
+HSRVPoints = function(concentrated, nonconcentrated){
+  if(nonconcentrated==0){
+    sum(concentrated>=VPointsConcentrated,na.rm = T)
+  }
+  else if(concentrated==0){
+    sum(nonconcentrated>VPointsNonConcentrated,na.rm = T)
+  }
+  else{
+    totalfvnl = (nonconcentrated+2*concentrated)/(nonconcentrated+2*concentrated+(100-concentrated-nonconcentrated))*100
+    sum(totalfvnl>VPointsNonConcentrated,na.rm = T)
+  }
+}
+```
+
+Combining the HSR Baseline, V point, and P & F points, we have the HSR Final Score as follows
+
+```{r}
+HSRFinalScore = function(Energy,SatFat,TotalSugar,Sodium,concentrated, nonconcentrated,Protein,Fibre){ 
+  if(HSRBaselinePoints(Energy,SatFat,TotalSugar,Sodium)>=13 & HSRVPoints(concentrated, nonconcentrated)<5){
+    HSRBaselinePoints(Energy,SatFat,TotalSugar,Sodium)-HSRVPoints(concentrated, nonconcentrated)-
+      sum(Fibre>FibrePoint,na.rm = T)
+  }
+  else{
+    HSRBaselinePoints(Energy,SatFat,TotalSugar,Sodium)-HSRVPoints(concentrated, nonconcentrated)-sum(Protein>ProteinPoint,na.rm = T)-
+      sum(Fibre>FibrePoint,na.rm = T)
+  }
+}
+```
+
+To check whethe we have coded this function correctly, we can test this on the three examples (Ex 3 Muesli Bar,Ex 4 Pizza Supreme, and Ex 8 Instant Chicken Noodle) available at the end of the guide. The scores for these items were listed in the guide as 9, 13, and 3, respectively.
+
+```{r}
+HSRFinalScore(1735,4.5,36.4,30,27,43,12.5,5)
+HSRFinalScore(1125,5.2,0.9,743,4,23,13.9,3.3)
+HSRFinalScore(65,0.1,0.5,290,0,0,0.3,0.5)
+```
+
+Lastly, we create the function called HSR Star with (Energy,SatFat,TotalSugar,Sodium,concentrated, nonconcentrated,Protein,Fibre) arguments. What this function does is to calculate HSR Final Score and look up the corresponding number of stars on the appropriate table.
+
+```{r}
+HSRStar = function(Energy,SatFat,TotalSugar,Sodium,concentrated, nonconcentrated,Protein,Fibre){
+  index = sum(HSRFinalScore(Energy,SatFat,TotalSugar,Sodium,concentrated, nonconcentrated,Protein,Fibre)<=Category,na.rm=T)
+  index = 10-index
+  ifelse(index==10,0.5,Star[index,1])
+}
+```
+
+Let's test this function using the same examples. The guide reported that the number of stars for the three examples were 2.5, 2, and 3 stars, respectively.
+
+```{r}
+HSRStar(1735,4.5,36.4,30,27,43,12.5,5)
+HSRStar(1125,5.2,0.9,743,4,23,13.9,3.3)
+HSRStar(65,0.1,0.5,290,0,0,0.3,0.5)
+```
+
+### Conclusion
+
+We have checked the correctness of our HSR function for Category 2 (Food). This function will be used later for the next part of the project, and this use will be documented on a different repository.
+
+HSR Calculator for other five categories or all categories at once, while is outside the scope of my project, can be programmed by slightly modifying this function.
+
+[1]: http://www.healthstarrating.gov.au/internet/healthstarrating/publishing.nsf/Content/guide-for-industry
